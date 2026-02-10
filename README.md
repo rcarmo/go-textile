@@ -1,27 +1,89 @@
-go-textile
-==========
+# go-textile
 
-A Go implementation of the Textile markup language, built with stdlib-first parsing and fixture-driven compatibility against the php-textile test suite.
+A Go implementation of the Textile markup language with a stdlib-first parser and fixture-driven compatibility against the php-textile test suite. The renderer aims for parity with php-textile behavior without vendoring or invoking the PHP library.
+
+## Features
+
+### Block-level parsing
+- Headings (`h1.`–`h6.`), paragraphs, and blockquotes.
+- Code blocks (`bc`, `pre`) and extended block syntax (`..`).
+- Lists (ordered/unordered), including nested and mixed list types.
+- Tables with captions, colgroups, thead/tfoot/tbody sections, and cell alignment.
+- Definition lists (classic and dash-style variants).
+- Raw block handling for custom tags (optional).
+- Block-level HTML wrapper detection and divider blocks (`<br>`, `<hr>`, `<img>`).
+
+### Inline parsing
+- Emphasis, strong, bold/italic, insert/delete, sub/sup, cite, code spans.
+- Links (inline, reference, quoted, bracketed) and images with attributes.
+- Footnotes and notelists.
+- Attribute fragments (class/id/style/lang/title) with normalization and ordering.
+- Glyph substitutions (quotes, dashes, ellipses, trademarks, fractions, dimension “x”).
+- Acronyms and caps wrapping.
+- Bracketed phrases and fractions.
+
+### Modes and policies
+- Restricted mode with HTML sanitization and scheme allowlisting.
+- Lite mode for minimal Textile parsing.
+- HTML5 vs. XHTML rendering (void tag style).
+- Optional raw HTML block passthrough.
+- URL sanitization/encoding helpers with prefix support.
+
+## Implementation status
+
+- ✅ All vendored php-textile fixtures pass (`go test ./...`).
+- ✅ Stdlib-first parsing with manual rune scanning (no regex-heavy parsing).
+- ✅ Fixture-driven test harness with filtering/limiting support.
+
+If new php-textile fixtures are added, run the full suite to confirm parity.
 
 ## Usage
 
 ```go
-html := textile.TextileToHtml(input, textile.Options{})
+package main
+
+import (
+	"fmt"
+
+	gotextile "github.com/rcarmo/go-textile"
+)
+
+func main() {
+	input := "h1. Hello"
+	html, err := gotextile.TextileToHtml(input)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(html)
+}
 ```
 
 ### Options
 
 ```go
 type Options struct {
-	Restricted bool
-	HTML5      bool
-	LineWrap   int
-	RawBlocks  bool
-	NoImages   bool
-	NoLinks    bool
-	NoTables   bool
-	NoGlyphs   bool
+	Lite                bool
+	Restricted          bool
+	Images              bool
+	DimensionlessImages bool
+	LinkRelationship    string
+	LinkPrefix          string
+	ImagePrefix         string
+	LineWrap            int
+	RawBlocks           bool
+	BlockTags           bool
+	HTML5               bool
+	NoGlyphs            bool
 }
+```
+
+Use `DefaultOptions()` as a baseline and override as needed:
+
+```go
+options := gotextile.DefaultOptions()
+options.Restricted = true
+options.HTML5 = true
+html, err := gotextile.TextileToHtmlWithOptions(input, options)
 ```
 
 ## Testing
@@ -42,6 +104,10 @@ TEXTILE_FIXTURE_FILTER="links.yaml" go test ./...
 TEXTILE_FIXTURE_LIMIT=50 go test ./...
 ```
 
+## Fixture provenance
+
+See `test/fixtures/README.md` for the php-textile source/version details and included assets.
+
 ## License
 
-MIT - See LICENSE
+MIT — see `LICENSE`.

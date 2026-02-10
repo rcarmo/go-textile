@@ -13,11 +13,23 @@ func parseHtmlWrapper(trimmed string, lines []string) (string, string, map[strin
 			return "p", inner, attrs, true
 		}
 	}
+	if strings.HasPrefix(trimmed, "<pre") && strings.Contains(lower, ">") && strings.HasSuffix(trimmed, "</pre>") {
+		start := strings.Index(trimmed, ">")
+		end := strings.LastIndex(trimmed, "</pre>")
+		if start != -1 && end != -1 && end > start {
+			inner := trimmed[start+1 : end]
+			attrs := parseHtmlAttributes(trimmed[:start+1])
+			return "pre", inner, attrs, true
+		}
+	}
 	if strings.HasPrefix(trimmed, "<") && strings.HasSuffix(trimmed, ">") && isHtmlTagStart(trimmed) {
 		if isInlineHtmlTag(trimmed) {
 			return "", "", nil, false
 		}
 		if isVoidHtmlTag(trimmed) {
+			if strings.Contains(trimmed, "</") {
+				return "", "", nil, false
+			}
 			return "", trimmed, nil, true
 		}
 	}
@@ -75,6 +87,37 @@ func isVoidHtmlTag(tag string) bool {
 		"link": true,
 	}
 	return voids[name]
+}
+
+func isDividerBlock(text string) bool {
+	idx := 0
+	hasTag := false
+	for idx < len(text) {
+		pos := strings.Index(text[idx:], "<")
+		if pos == -1 {
+			return strings.TrimSpace(text[idx:]) == "" && hasTag
+		}
+		pos += idx
+		if strings.TrimSpace(text[idx:pos]) != "" {
+			return false
+		}
+		end := strings.Index(text[pos:], ">")
+		if end == -1 {
+			return false
+		}
+		end += pos
+		tag := text[pos : end+1]
+		if strings.Contains(tag[1:], "<") {
+			return false
+		}
+		name := htmlTagName(tag)
+		if name == "" || (name != "br" && name != "hr" && name != "img") {
+			return false
+		}
+		hasTag = true
+		idx = end + 1
+	}
+	return hasTag
 }
 
 func htmlTagName(tag string) string {

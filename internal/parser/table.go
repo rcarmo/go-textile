@@ -236,6 +236,27 @@ func parseTableCell(cell string, options Options) (*document.D, error) {
 		attrs = nil
 	}
 	if strings.Contains(working, "\n") {
+		lines := strings.Split(working, "\n")
+		if idx := firstListLineIndex(lines); idx > 0 {
+			prefixLines := lines[:idx]
+			listLines := lines[idx:]
+			list, err := parseListLines(listLines, options)
+			if err != nil {
+				return nil, err
+			}
+			if list != nil {
+				inlineNode, err := parseInlineLines(prefixLines, "inline", nil, options)
+				if err != nil {
+					return nil, err
+				}
+				cell := document.New(tag)
+				cell.Attr = attrs
+				cell.Children = append(cell.Children, inlineNode.Children...)
+				cell.AddChild(&document.D{Tag: "br"})
+				cell.AddChild(list)
+				return cell, nil
+			}
+		}
 		trimmedContent := strings.TrimSpace(working)
 		if isListStart(trimmedContent, '*') || isListStart(trimmedContent, '#') {
 			list, err := parseMixedList(strings.Split(working, "\n"), options)
@@ -245,6 +266,9 @@ func parseTableCell(cell string, options Options) (*document.D, error) {
 			cell := document.New(tag)
 			cell.Attr = attrs
 			if list != nil {
+				if len(lines) > 0 && (strings.HasPrefix(lines[0], " ") || strings.HasPrefix(lines[0], "\t")) {
+					cell.AddChild(document.Text(" ", true))
+				}
 				cell.AddChild(list)
 			}
 			return cell, nil

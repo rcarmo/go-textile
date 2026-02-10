@@ -136,6 +136,15 @@ func parseMixedList(lines []string, options Options) (*document.D, error) {
 					}
 				}
 				content = rest
+			} else if listAttrs, ok := parseListAttrsOnly(content, options); ok {
+				if listStack[0].Attr == nil {
+					listStack[0].Attr = listAttrs
+				} else {
+					for k, v := range listAttrs {
+						listStack[0].Attr[k] = v
+					}
+				}
+				continue
 			}
 		}
 		if strings.TrimSpace(content) == "" {
@@ -215,4 +224,23 @@ func listTag(marker rune) string {
 		return "ol"
 	}
 	return "ul"
+}
+
+func parseListAttrsOnly(content string, options Options) (map[string]string, bool) {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return nil, false
+	}
+	if !strings.HasPrefix(trimmed, "(") && !strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[") {
+		return nil, false
+	}
+	fragment, remaining := extractAttributeFragment(trimmed)
+	if strings.TrimSpace(remaining) != "" {
+		return nil, false
+	}
+	attrs := parseAttributes(fragment, options)
+	if attrs == nil {
+		return nil, false
+	}
+	return attrs, true
 }

@@ -1,25 +1,45 @@
 package parser
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 func parseInlineAttrSequence(text string, options Options) (map[string]string, string) {
 	attrs := map[string]string{}
 	original := strings.TrimLeft(text, " \t")
 	rest := original
 	fragments := []string{}
+	consumed := false
 	for strings.HasPrefix(rest, "(") || strings.HasPrefix(rest, "{") || strings.HasPrefix(rest, "[") {
 		fragment, remaining := extractInlineAttrFragment(rest)
 		if fragment == "" {
 			break
 		}
 		if options.Restricted && strings.HasPrefix(fragment, "(") && strings.Contains(fragment, " ") {
-			return nil, original
+			if len(fragments) == 0 {
+				return nil, original
+			}
+			rest = strings.TrimLeft(fragment+remaining, " \t")
+			break
 		}
 		fragments = append(fragments, fragment)
 		fragmentAttrs := parseAttributes(fragment, options)
+		if fragmentAttrs == nil {
+			if options.Restricted && (strings.HasPrefix(fragment, "(") || strings.HasPrefix(fragment, "{")) {
+				consumed = true
+				rest = strings.TrimLeft(remaining, " \t")
+				continue
+			}
+			if len(attrs) == 0 && !consumed {
+				return nil, original
+			}
+			break
+		}
 		for k, v := range fragmentAttrs {
 			attrs[k] = v
 		}
+		consumed = true
 		if remaining == rest {
 			break
 		}
@@ -41,9 +61,16 @@ func parseInlineAttrSequence(text string, options Options) (map[string]string, s
 		if allParen {
 			attrs = parseAttributes(fragments[0], options)
 			rest = strings.TrimLeft(original[len(fragments[0]):], " \t")
+			consumed = true
 		}
 	}
 	if len(attrs) == 0 {
+		if !consumed {
+			return nil, rest
+		}
+		if rest == "" {
+			return nil, text
+		}
 		return nil, rest
 	}
 	if rest == "" {
@@ -84,6 +111,12 @@ func extractLinkTitle(text string) (string, string) {
 	if strings.HasSuffix(text, ")") {
 		open := strings.LastIndex(text, "(")
 		if open > 0 {
+			prefix := text[:open]
+			if !hasTextOutsideParens(prefix) {
+				if !strings.Contains(prefix, ")") {
+					return text, ""
+				}
+			}
 			title := text[open+1 : len(text)-1]
 			if !strings.Contains(title, "(") {
 				return strings.TrimSpace(text[:open]), title
@@ -91,6 +124,26 @@ func extractLinkTitle(text string) (string, string) {
 		}
 	}
 	return text, ""
+}
+
+func hasTextOutsideParens(text string) bool {
+	depth := 0
+	for _, r := range text {
+		switch r {
+		case '(':
+			depth++
+			continue
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+			continue
+		}
+		if depth == 0 && !unicode.IsSpace(r) {
+			return true
+		}
+	}
+	return false
 }
 
 func trimLinkPunctuation(url string) (string, int) {

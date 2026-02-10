@@ -3,6 +3,9 @@ package parser
 import "strings"
 
 func extractImageDimensions(url string) (string, string) {
+	if strings.Contains(url, "..") {
+		return "", ""
+	}
 	base := url
 	if idx := strings.LastIndex(base, "/"); idx != -1 {
 		base = base[idx+1:]

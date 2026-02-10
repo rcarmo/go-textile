@@ -24,6 +24,7 @@ type Options struct {
 	RawBlocks           bool
 	BlockTags           bool
 	HTML5               bool
+	NoGlyphs            bool
 }
 
 type block struct {
@@ -61,6 +62,7 @@ var (
 	noteListSpecs            []noteListSpec
 	noteNoLinks              bool
 	restrictedParsing        bool
+	disableGlyphs            bool
 	lastOrderedIndexByLevel  map[int]int
 )
 
@@ -76,6 +78,7 @@ func ParseDocument(text string, options Options) (*document.D, error) {
 	noteListSpecs = nil
 	noteNoLinks = false
 	restrictedParsing = options.Restricted
+	disableGlyphs = options.NoGlyphs
 	lastOrderedIndexByLevel = map[int]int{}
 	lines := readLines(text)
 	lines, linkRefs = collectLinkRefs(lines)
@@ -92,6 +95,9 @@ func ParseDocument(text string, options Options) (*document.D, error) {
 		if parsed != nil {
 			d.AddChild(parsed)
 		}
+	}
+	if len(noteDefOrder) == 0 {
+		noteNoLinks = true
 	}
 	finalizeNoteRefs()
 	finalizeNoteLists(options)
@@ -151,7 +157,27 @@ func splitBlocks(lines []string) []block {
 
 func isExtendedStart(line string) bool {
 	trimmed := strings.TrimSpace(line)
-	return strings.HasPrefix(trimmed, "bc..") || strings.HasPrefix(trimmed, "pre..") || strings.HasPrefix(trimmed, "notextile..")
+	switch {
+	case strings.HasPrefix(trimmed, "bc"):
+		return hasDoubleDotAfterTag(trimmed[2:])
+	case strings.HasPrefix(trimmed, "pre"):
+		return hasDoubleDotAfterTag(trimmed[3:])
+	case strings.HasPrefix(trimmed, "notextile"):
+		return hasDoubleDotAfterTag(trimmed[len("notextile"):])
+	default:
+		return false
+	}
+}
+
+func hasDoubleDotAfterTag(rest string) bool {
+	rest = strings.TrimLeftFunc(rest, unicode.IsSpace)
+	_, _, rest = parsePadding(rest)
+	_, rest = parseAlignment(rest)
+	if strings.HasPrefix(rest, "(") || strings.HasPrefix(rest, "{") || strings.HasPrefix(rest, "[") {
+		_, rest = extractAttributeFragment(rest)
+	}
+	rest = strings.TrimLeftFunc(rest, unicode.IsSpace)
+	return strings.HasPrefix(rest, "..")
 }
 
 func isBlockStart(line string) bool {
@@ -185,6 +211,46 @@ func isExtendedTerminator(line string) bool {
 	return isBlockStart(line)
 }
 
+func firstListLineIndex(lines []string) int {
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if isListStart(trimmed, '*') || isListStart(trimmed, '#') {
+			return i
+		}
+		if strings.HasPrefix(trimmed, ";") || strings.HasPrefix(trimmed, ":") {
+			return i
+		}
+		if strings.HasPrefix(trimmed, "-") && blockHasDefinition(lines[i:]) {
+			return i
+		}
+	}
+	return -1
+}
+
+func parseListLines(lines []string, options Options) (*document.D, error) {
+	if len(lines) == 0 {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(lines[0])
+	if isListStart(trimmed, '*') || isListStart(trimmed, '#') {
+		markers, _, _, _, ok := parseListMarkers(trimmed)
+		if ok && len(markers) > 1 {
+			return nil, nil
+		}
+		return parseMixedList(lines, options)
+	}
+	if strings.HasPrefix(trimmed, ";") || strings.HasPrefix(trimmed, ":") {
+		return parseClassicDefinitionList(lines, options)
+	}
+	if strings.HasPrefix(trimmed, "-") && blockHasDefinition(lines) {
+		return parseDefinitionList(lines, options)
+	}
+	return nil, nil
+}
+
 func parseBlock(blk block, options Options) (*document.D, error) {
 	trimmed := strings.TrimSpace(blk.Lines[0])
 	if trimmed == "" {
@@ -198,6 +264,7 @@ func parseBlock(blk block, options Options) (*document.D, error) {
 		if strings.HasSuffix(strings.TrimSpace(blk.Lines[len(blk.Lines)-1]), "-->") {
 			if options.Restricted {
 				escaped, _ := escapeAndGlyphWithPrev(comment, 0)
+				escaped = strings.ReplaceAll(escaped, "&#8220;", "&#8221;")
 				escaped = wrapCaps(escaped)
 				escaped = strings.ReplaceAll(escaped, "\n", "<br />\n")
 				p := document.New("p")
@@ -207,11 +274,23 @@ func parseBlock(blk block, options Options) (*document.D, error) {
 			return document.Text(comment, true), nil
 		}
 	}
+	if !options.Restricted {
+		blockText := strings.Join(blk.Lines, "\n")
+		if isDividerBlock(blockText) {
+			return document.Text(blockText, true), nil
+		}
+	}
 	if htmlTag, inner, attrs, ok := parseHtmlWrapper(trimmed, blk.Lines); ok {
 		if options.Restricted {
 			return parseInline(strings.Join(blk.Lines, "\n"), "p", nil, options)
 		}
 		if htmlTag != "" {
+			if htmlTag == "pre" {
+				pre := document.New("pre")
+				pre.Attr = attrs
+				pre.AddChild(document.Text(renderPreContent(inner), true))
+				return pre, nil
+			}
 			return parseInline(inner, htmlTag, attrs, options)
 		}
 		if len(blk.Lines) > 1 {
@@ -286,9 +365,25 @@ func parseBlock(blk block, options Options) (*document.D, error) {
 	if strings.HasPrefix(trimmed, "bc") {
 		if attrs, content, ok := parseBlockWithTag(blk, "bc", options); ok {
 			content = strings.TrimSuffix(content, "\n")
-			pre := document.New("pre+code")
+			codeAttrs := map[string]string{}
+			if attrs != nil {
+				if lang := attrs["lang"]; lang != "" {
+					codeAttrs["class"] = lang
+					delete(attrs, "lang")
+				}
+				if len(attrs) == 0 {
+					attrs = nil
+				}
+			}
+			if len(codeAttrs) == 0 {
+				codeAttrs = nil
+			}
+			pre := document.New("pre")
 			pre.Attr = attrs
-			pre.AddChild(document.Text(escapeHTML(content), true))
+			code := document.New("code")
+			code.Attr = codeAttrs
+			code.AddChild(document.Text(escapeHTML(content), true))
+			pre.AddChild(code)
 			return pre, nil
 		}
 	}
@@ -301,7 +396,32 @@ func parseBlock(blk block, options Options) (*document.D, error) {
 			return pre, nil
 		}
 	}
+	if idx := firstListLineIndex(blk.Lines); idx > 0 && !strings.HasPrefix(trimmed, "|") && !strings.HasPrefix(trimmed, "table") {
+		prefixLines := blk.Lines[:idx]
+		listLines := blk.Lines[idx:]
+		inlineNode, err := parseInlineLines(prefixLines, "inline", nil, options)
+		if err != nil {
+			return nil, err
+		}
+		listNode, err := parseListLines(listLines, options)
+		if err != nil {
+			return nil, err
+		}
+		if listNode != nil {
+			container := document.New("inline")
+			container.Children = append(container.Children, inlineNode.Children...)
+			if len(inlineNode.Children) > 0 {
+				container.AddChild(document.Text("\n", true))
+			}
+			container.AddChild(listNode)
+			return container, nil
+		}
+	}
 	if isListStart(trimmed, '*') || isListStart(trimmed, '#') {
+		markers, _, _, _, ok := parseListMarkers(trimmed)
+		if ok && len(markers) > 1 {
+			return parseInline(strings.Join(blk.Lines, "\n"), "p", nil, options)
+		}
 		return parseMixedList(blk.Lines, options)
 	}
 	if strings.HasPrefix(trimmed, "|") || strings.HasPrefix(trimmed, "table") {
@@ -319,10 +439,16 @@ func parseBlock(blk block, options Options) (*document.D, error) {
 			return dl, nil
 		}
 	}
+	if !options.BlockTags {
+		return parseInlineLines(blk.Lines, "inline", nil, options)
+	}
 	if strings.HasPrefix(trimmed, "p") {
 		if attrs, content, ok := parseBlockWithTag(blk, "p", options); ok {
 			return parseInline(content, "p", attrs, options)
 		}
+	}
+	if !options.Restricted && containsClosingBlockTag(blk.Lines) {
+		return parseInlineLines(blk.Lines, "inline", nil, options)
 	}
 	if hasLeadingWhitespace(blk.Lines[0]) || (!options.Restricted && options.BlockTags && containsBlockTag(blk.Lines)) {
 		return parseInlineLines(blk.Lines, "inline", nil, options)
@@ -371,6 +497,10 @@ func parseTagLine(rest string, options Options) (map[string]string, string, bool
 		attrsPart, rest = extractAttributeFragment(rest)
 	}
 	rest = strings.TrimLeftFunc(rest, unicode.IsSpace)
+	if align == "" {
+		align, rest = parseAlignment(rest)
+	}
+	rest = strings.TrimLeftFunc(rest, unicode.IsSpace)
 	if !strings.HasPrefix(rest, ".") {
 		return nil, "", false
 	}
@@ -380,6 +510,9 @@ func parseTagLine(rest string, options Options) (map[string]string, string, bool
 	}
 	content := strings.TrimLeftFunc(rest, unicode.IsSpace)
 	attrs := parseAttributes(attrsPart, options)
+	if options.Restricted {
+		align = ""
+	}
 	if align != "" {
 		if attrs == nil {
 			attrs = map[string]string{}
@@ -697,6 +830,18 @@ func parseInline(text string, tag string, attrs map[string]string, options Optio
 	prevRune := rune(0)
 	for idx < len(text) {
 		if strings.HasPrefix(text[idx:], "\n") {
+			if tag == "td" || tag == "th" {
+				nextRune := rune(0)
+				if idx+1 < len(text) {
+					nextRune, _ = utf8.DecodeRuneInString(text[idx+1:])
+				}
+				if nextRune == ' ' || nextRune == '\t' {
+					node.AddChild(document.Text("\n", true))
+					prevRune = '\n'
+					idx++
+					continue
+				}
+			}
 			if options.LineWrap == 0 {
 				if prevRune == 0 || !unicode.IsSpace(prevRune) {
 					node.AddChild(document.Text(" ", true))
@@ -748,9 +893,7 @@ func parseInline(text string, tag string, attrs map[string]string, options Optio
 			}
 		}
 		if r == 'x' || r == 'X' {
-			prevNon := prevNonSpaceRune(text, idx, prevRune)
-			nextNon := nextNonSpaceRune(text, idx+1)
-			if isDimNumberChar(prevNon) && isDimNumberChar(nextNon) {
+			if shouldReplaceDimension(text, idx, 1, prevRune) {
 				node.AddChild(document.Text("&#215;", true))
 				prevRune = '×'
 				idx++
@@ -795,6 +938,12 @@ func parseInline(text string, tag string, attrs map[string]string, options Optio
 		}
 		if r == '@' {
 			if !options.Lite {
+				if idx > 0 {
+					prev, _ := utf8.DecodeLastRuneInString(text[:idx])
+					if isAlphaNumeric(prev) || prev == ')' {
+						goto skipCode
+					}
+				}
 				if code, advance, ok := parseDelimited(text, idx, "@", true); ok {
 					node.AddChild(&document.D{Tag: "code", Children: []*document.D{document.Text(escapeHTML(code), true)}})
 					idx += advance
@@ -802,6 +951,7 @@ func parseInline(text string, tag string, attrs map[string]string, options Optio
 				}
 			}
 		}
+	skipCode:
 		if r == '*' {
 			if child, last, advance, ok := parseDelimitedInline(text, idx, "**", "b", options); ok {
 				node.AddChild(child)
@@ -883,6 +1033,7 @@ func parseInline(text string, tag string, attrs map[string]string, options Optio
 			}
 		}
 		if r == '-' {
+			size := utf8.RuneLen(r)
 			if strings.HasPrefix(text[idx:], "--") {
 				prevRune = addTextNodes(node, "--", prevRune)
 				idx += 2
@@ -896,18 +1047,34 @@ func parseInline(text string, tag string, attrs map[string]string, options Optio
 			if idx+1 < len(text) {
 				next, _ = utf8.DecodeRuneInString(text[idx+1:])
 			}
-			if prev == ' ' && next == ' ' {
-				node.AddChild(document.Text("&#8211;", true))
-				prevRune = '–'
-				idx++
-				continue
+			if next == ' ' {
+				nextNonSpace := nextNonSpaceRune(text, idx+size+1)
+				if nextNonSpace != 0 && nextNonSpace != '-' {
+					if prev == ' ' || (prev == 0 && hasTrailingDashSpace(text[idx+size:])) {
+						node.AddChild(document.Text("&#8211;", true))
+						prevRune = '–'
+						idx++
+						continue
+					}
+				}
 			}
-			if !isAlphaNumeric(prev) && (isAlphaNumeric(next) || next == '(' || next == '[' || next == '{') {
-				if child, last, advance, ok := parseDelimitedInline(text, idx, "-", "del", options); ok {
-					node.AddChild(child)
-					prevRune = last
-					idx += advance
+			if next == 0 && prev == ' ' && strings.HasPrefix(text, "- ") {
+				inner := strings.TrimSpace(text[2:idx])
+				if inner != "" {
+					node.AddChild(document.Text("&#8211;", true))
+					prevRune = '–'
+					idx++
 					continue
+				}
+			}
+			if prev != '*' && prev != '_' {
+				if !isAlphaNumeric(prev) && (isAlphaNumeric(next) || next == '(' || next == '[' || next == '{') {
+					if child, last, advance, ok := parseDelimitedInline(text, idx, "-", "del", options); ok {
+						node.AddChild(child)
+						prevRune = last
+						idx += advance
+						continue
+					}
 				}
 			}
 		}
@@ -950,28 +1117,6 @@ func parseInline(text string, tag string, attrs map[string]string, options Optio
 				if idx+size < len(text) {
 					nextRune, _ = utf8.DecodeRuneInString(text[idx+size:])
 				}
-				handledEmpty := false
-				if r == '"' && unicode.IsSpace(nextRune) {
-					scan := idx + size
-					for scan < len(text) {
-						r2, size2 := utf8.DecodeRuneInString(text[scan:])
-						if unicode.IsSpace(r2) {
-							scan += size2
-							continue
-						}
-						if r2 == '"' {
-							node.AddChild(document.Text("&#8220;", true))
-							node.AddChild(document.Text("&#8221;", true))
-							prevRune = r
-							idx = scan + size2
-							handledEmpty = true
-						}
-						break
-					}
-				}
-				if handledEmpty {
-					continue
-				}
 				entity := ""
 				if r == '\'' && (prevRune == 0 || unicode.IsSpace(prevRune)) && unicode.IsDigit(nextRune) {
 					if hasClosingSingleQuote(text, idx+size) {
@@ -979,6 +1124,8 @@ func parseInline(text string, tag string, attrs map[string]string, options Optio
 					} else {
 						entity = "&#8217;"
 					}
+				} else if r == '\'' && (nextRune == '[' || nextRune == '(' || nextRune == '{') {
+					entity = "&#8216;"
 				} else {
 					entity = quoteEntity(r, prevRune, nextRune)
 				}
@@ -1017,6 +1164,20 @@ func parseDelimited(text string, idx int, delim string, literal bool) (string, i
 			continue
 		}
 		if braceDepth == 0 && strings.HasPrefix(text[scan:], delim) {
+			if len(delim) == 1 && (delim == "_" || delim == "*") {
+				prev := rune(0)
+				if scan > 0 {
+					prev, _ = utf8.DecodeLastRuneInString(text[:scan])
+				}
+				next := rune(0)
+				if scan+len(delim) < len(text) {
+					next, _ = utf8.DecodeRuneInString(text[scan+len(delim):])
+				}
+				if isAlphaNumeric(prev) && isAlphaNumeric(next) {
+					scan++
+					continue
+				}
+			}
 			content := text[start:scan]
 			return content, len(delim)*2 + scan - start, true
 		}
@@ -1035,6 +1196,21 @@ func parseDelimitedInline(text string, idx int, delim string, tag string, option
 	}
 	if tag == "del" && strings.Contains(content, "\n") {
 		return nil, 0, 0, false
+	}
+	if tag == "strong" || tag == "em" || tag == "b" || tag == "i" {
+		endIdx := idx + advance
+		if endIdx < len(text) {
+			nextRune, size := utf8.DecodeRuneInString(text[endIdx:])
+			if nextRune == '-' {
+				nextNext := rune(0)
+				if endIdx+size < len(text) {
+					nextNext, _ = utf8.DecodeRuneInString(text[endIdx+size:])
+				}
+				if unicode.IsLetter(nextNext) || unicode.IsDigit(nextNext) {
+					return nil, 0, 0, false
+				}
+			}
+		}
 	}
 	attrs, inner := parseInlineAttributes(content, options)
 	if attrs != nil {
@@ -1085,12 +1261,99 @@ func parseInlineAttributes(text string, options Options) (map[string]string, str
 			}
 		}
 	}
-	if strings.HasPrefix(trimmed, "(") || strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
-		attrsPart, rest := extractAttributeFragment(trimmed)
-		attrs := parseAttributes(attrsPart, options)
-		return attrs, strings.TrimSpace(rest)
+	attrs := map[string]string{}
+	rest := trimmed
+	fragments := []string{}
+	consumed := false
+	for strings.HasPrefix(rest, "(") || strings.HasPrefix(rest, "{") || strings.HasPrefix(rest, "[") {
+		if strings.HasPrefix(rest, "[@") {
+			break
+		}
+		fragment, remaining := extractInlineAttrFragment(rest)
+		if fragment == "" {
+			break
+		}
+		fragmentAttrs := parseAttributes(fragment, options)
+		if fragmentAttrs == nil {
+			if options.Restricted && (strings.HasPrefix(fragment, "(") || strings.HasPrefix(fragment, "{")) {
+				rest = strings.TrimLeft(remaining, " \t")
+				consumed = true
+				continue
+			}
+			if len(fragments) == 0 && !consumed {
+				return nil, trimmed
+			}
+			if strings.HasPrefix(fragment, "[") {
+				inner := strings.TrimSuffix(strings.TrimPrefix(fragment, "["), "]")
+				if isBracketedPhrase(inner) {
+					rest = strings.TrimLeft(fragment+remaining, " \t")
+					break
+				}
+			}
+			if strings.TrimSpace(remaining) != "" {
+				rest = strings.TrimLeft(remaining, " \t")
+				continue
+			}
+			break
+		}
+		if strings.TrimSpace(remaining) == "" {
+			if len(fragments) == 0 {
+				return nil, trimmed
+			}
+			break
+		}
+		fragments = append(fragments, fragment)
+		for k, v := range fragmentAttrs {
+			attrs[k] = v
+		}
+		consumed = true
+		rest = strings.TrimLeft(remaining, " \t")
 	}
-	return nil, trimmed
+	if len(fragments) > 1 {
+		first := fragments[0][0]
+		allSame := true
+		for _, fragment := range fragments {
+			if fragment == "" || fragment[0] != first {
+				allSame = false
+				break
+			}
+		}
+		if allSame {
+			attrs = parseAttributes(fragments[0], options)
+			rest = strings.TrimLeft(trimmed[len(fragments[0]):], " \t")
+		}
+	}
+	if strings.HasPrefix(rest, ":") {
+		if cite, remaining, ok := parseCitePrefix(rest); ok {
+			attrs["cite"] = cite
+			rest = remaining
+		}
+	}
+	if len(attrs) == 0 && !consumed {
+		return nil, trimmed
+	}
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return nil, trimmed
+	}
+	return attrs, rest
+}
+
+func parseCitePrefix(text string) (string, string, bool) {
+	if !strings.HasPrefix(text, ":") {
+		return "", text, false
+	}
+	trimmed := strings.TrimPrefix(text, ":")
+	idx := strings.IndexFunc(trimmed, unicode.IsSpace)
+	if idx == -1 {
+		return "", text, false
+	}
+	cite := strings.TrimSpace(trimmed[:idx])
+	if cite == "" {
+		return "", text, false
+	}
+	rest := strings.TrimLeftFunc(trimmed[idx:], unicode.IsSpace)
+	return cite, rest, true
 }
 
 func parseBracketFraction(text string, idx int) (string, rune, int, bool) {
@@ -1187,9 +1450,10 @@ func parseFootnoteRef(text string, idx int) (*document.D, int, bool) {
 	if !isUnicodeDigits(payload) {
 		return nil, 0, false
 	}
+	unicodeOnly := !isDigits(payload)
 	sup := document.New("sup")
 	attrs := map[string]string{"class": "footnote"}
-	if footnoteRefs != nil {
+	if !unicodeOnly && footnoteRefs != nil {
 		footnoteRefs[payload]++
 		if footnoteRefs[payload] == 1 {
 			attrs["id"] = "fnrev"
@@ -1202,7 +1466,9 @@ func parseFootnoteRef(text string, idx int) (*document.D, int, bool) {
 		return sup, end - idx + 1, true
 	}
 	link := document.New("a")
-	link.Attr = map[string]string{"href": "#fn"}
+	if !unicodeOnly {
+		link.Attr = map[string]string{"href": "#fn"}
+	}
 	link.AddChild(document.Text(escaped, true))
 	sup.AddChild(link)
 	return sup, end - idx + 1, true
@@ -1288,6 +1554,7 @@ func parseFootnoteBlock(blk block, options Options) (*document.D, bool, error) {
 	if !ok {
 		return nil, false, nil
 	}
+	unicodeOnly := !isDigits(number)
 	customAttrs := attrs != nil && (attrs["class"] != "" || attrs["id"] != "")
 	if attrs == nil {
 		attrs = map[string]string{}
@@ -1295,7 +1562,7 @@ func parseFootnoteBlock(blk block, options Options) (*document.D, bool, error) {
 	if attrs["class"] == "" {
 		attrs["class"] = "footnote"
 	}
-	if attrs["id"] == "" {
+	if attrs["id"] == "" && !unicodeOnly {
 		attrs["id"] = "fn"
 	}
 	content = appendBlockLines(content, blk.Lines[1:])
@@ -1304,11 +1571,11 @@ func parseFootnoteBlock(blk block, options Options) (*document.D, bool, error) {
 		return nil, true, err
 	}
 	sup := document.New("sup")
-	if customAttrs {
+	if customAttrs && !unicodeOnly {
 		sup.Attr = map[string]string{"id": "fn"}
 	}
 	escaped, _ := escapeAndGlyphWithPrev(number, 0)
-	if modifier == '^' {
+	if modifier == '^' && !unicodeOnly {
 		link := document.New("a")
 		link.Attr = map[string]string{"href": "#fnrev"}
 		link.AddChild(document.Text(escaped, true))
@@ -1348,6 +1615,7 @@ func parseInlineComment(text string, idx int, options Options) (*document.D, int
 	comment := text[idx : end+3]
 	if options.Restricted {
 		escaped, _ := escapeAndGlyphWithPrev(comment, 0)
+		escaped = strings.ReplaceAll(escaped, "&#8220;", "&#8221;")
 		escaped = wrapCaps(escaped)
 		escaped = strings.ReplaceAll(escaped, "\n", "<br />\n")
 		return document.Text(escaped, true), len(comment), true
@@ -1415,6 +1683,9 @@ func parseQuotedLink(text string, idx int, options Options) (*document.D, rune, 
 			return nil, 0, 0, false
 		}
 	}
+	if idx+1 < len(text) && text[idx+1] == '%' {
+		return nil, 0, 0, false
+	}
 	endQuote := -1
 	for scan := idx + 1; scan < len(text); {
 		if text[scan] != '"' {
@@ -1434,16 +1705,21 @@ func parseQuotedLink(text string, idx int, options Options) (*document.D, rune, 
 			continue
 		}
 		if scan+1 < len(text) && text[scan+1] == ':' {
-			rawText := text[idx+1 : scan]
-			if strings.TrimSpace(rawText) != "" {
-				endQuote = scan
-				break
-			}
+			endQuote = scan
+			break
+		}
+		if scan-1 >= idx && text[scan-1] == '"' {
+			scan++
+			continue
 		}
 		scan++
 	}
 	if endQuote == -1 {
 		return nil, 0, 0, false
+	}
+	rawLinkText := text[idx+1 : endQuote]
+	if strings.TrimSpace(rawLinkText) == "" {
+		return document.Text("&#8220;&#8221;", true), '"', endQuote - idx + 1, true
 	}
 	if endQuote+1 >= len(text) || text[endQuote+1] != ':' {
 		return nil, 0, 0, false
@@ -1452,8 +1728,13 @@ func parseQuotedLink(text string, idx int, options Options) (*document.D, rune, 
 	urlEnd := urlStart
 	for urlEnd < len(text) {
 		r, size := utf8.DecodeRuneInString(text[urlEnd:])
-		if unicode.IsSpace(r) || r == '<' {
+		if unicode.IsSpace(r) {
 			break
+		}
+		if r == '<' {
+			if urlEnd <= urlStart || text[urlEnd-1] != '/' {
+				break
+			}
 		}
 		urlEnd += size
 	}
@@ -1463,7 +1744,6 @@ func parseQuotedLink(text string, idx int, options Options) (*document.D, rune, 
 		return nil, 0, 0, false
 	}
 	urlEnd = urlStart + len(rawURL) - trimCount
-	rawLinkText := text[idx+1 : endQuote]
 	trimmedLeft := strings.TrimLeft(rawLinkText, " \t")
 	if trimmedLeft == "" {
 		return nil, 0, 0, false
@@ -1489,6 +1769,7 @@ func parseQuotedLink(text string, idx int, options Options) (*document.D, rune, 
 	}
 	linkAttrs, linkText := parseInlineAttrSequence(linkText, options)
 	linkText, title := extractLinkTitle(linkText)
+	title = normalizeLinkTitle(title)
 	linkText = strings.TrimSpace(linkText)
 	if linkText == "" {
 		return nil, 0, 0, false
@@ -1504,6 +1785,9 @@ func parseQuotedLink(text string, idx int, options Options) (*document.D, rune, 
 			url = ref
 			refExpanded = true
 		}
+	}
+	if options.LinkPrefix != "" && shouldApplyPrefix(url) {
+		url = options.LinkPrefix + url
 	}
 	if options.Restricted {
 		if !isAllowedSchemeRestricted(url) {
@@ -1555,6 +1839,28 @@ func normalizeLinkQuotes(text string) string {
 	return text
 }
 
+func normalizeLinkTitle(title string) string {
+	if title == "" {
+		return title
+	}
+	return stripTextileEscapes(title)
+}
+
+func stripTextileEscapes(text string) string {
+	for {
+		idx := strings.Index(text, "==")
+		if idx == -1 {
+			break
+		}
+		content, advance, ok := parseDelimited(text, idx, "==", false)
+		if !ok {
+			break
+		}
+		text = text[:idx] + content + text[idx+advance:]
+	}
+	return text
+}
+
 func parseBang(text string, idx int, options Options) (*document.D, int, bool) {
 	if idx > 0 {
 		prev, _ := utf8.DecodeLastRuneInString(text[:idx])
@@ -1583,7 +1889,13 @@ func parseBang(text string, idx int, options Options) (*document.D, int, bool) {
 			}
 			linkEnd += size
 		}
-		linkTarget = sanitizeURL(text[linkStart:linkEnd], options)
+		rawLink := text[linkStart:linkEnd]
+		if options.Restricted {
+			if !isAllowedSchemeRestricted(rawLink) {
+				return nil, 0, false
+			}
+		}
+		linkTarget = sanitizeURL(rawLink, options)
 		advance = linkEnd - idx
 	}
 	if !options.Images {
@@ -1596,6 +1908,9 @@ func parseBang(text string, idx int, options Options) (*document.D, int, bool) {
 	} else if strings.HasPrefix(payload, ">") {
 		align = "right"
 		payload = strings.TrimPrefix(payload, ">")
+	} else if strings.HasPrefix(payload, "=") {
+		align = "center"
+		payload = strings.TrimPrefix(payload, "=")
 	}
 	imgAttrs, payload := parseInlineAttrSequence(payload, options)
 	url := payload
@@ -1603,6 +1918,16 @@ func parseBang(text string, idx int, options Options) (*document.D, int, bool) {
 	if open := strings.LastIndex(payload, "("); open != -1 && strings.HasSuffix(payload, ")") {
 		alt = payload[open+1 : len(payload)-1]
 		url = payload[:open]
+	}
+	if options.ImagePrefix != "" && shouldApplyPrefix(url) {
+		url = options.ImagePrefix + url
+	}
+	if options.Restricted {
+		if !isAllowedSchemeRestricted(url) {
+			return nil, 0, false
+		}
+	} else if !isAllowedScheme(url) {
+		return nil, 0, false
 	}
 	url = sanitizeImageURL(url, options)
 	img := document.New("img")
@@ -1671,7 +1996,7 @@ func parseAttributes(fragment string, options Options) map[string]string {
 					} else {
 						style = decoded
 					}
-				} else if strings.Contains(style, "%") {
+				} else if hasPercentEncoding(style) {
 					style = ""
 				}
 				if style != "" {
@@ -1749,15 +2074,18 @@ func setClassID(attrs map[string]string, classID string, options Options) {
 	for _, part := range strings.Fields(classID) {
 		if strings.Contains(part, "#") {
 			pieces := strings.SplitN(part, "#", 2)
-			if pieces[0] != "" {
+			if pieces[0] != "" && isValidClassName(pieces[0]) {
 				classParts = append(classParts, pieces[0])
 			}
-			if pieces[1] != "" {
+			if pieces[1] != "" && isValidClassName(pieces[1]) {
 				id = pieces[1]
 			}
 		} else if strings.HasPrefix(part, "#") {
-			id = strings.TrimPrefix(part, "#")
-		} else {
+			candidate := strings.TrimPrefix(part, "#")
+			if candidate != "" && isValidClassName(candidate) {
+				id = candidate
+			}
+		} else if isValidClassName(part) {
 			classParts = append(classParts, part)
 		}
 	}
@@ -1769,18 +2097,54 @@ func setClassID(attrs map[string]string, classID string, options Options) {
 	}
 }
 
+func isValidClassName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '/' || r == ':' || r == '!' || r == '[' || r == ']' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func nextSpecialIndex(text string, idx int) int {
-	specials := "\n\"!@*_~^?%[<xX-+="
+	specials := "\n\"'!@*_~^?%[<xX-+="
 	parenDepth := 0
+	acroParenDepth := 0
 	for idx < len(text) {
 		r, size := utf8.DecodeRuneInString(text[idx:])
 		if r == '(' {
 			parenDepth++
+			if acroParenDepth == 0 {
+				count := 0
+				scan := idx
+				for scan > 0 {
+					prev, prevSize := utf8.DecodeLastRuneInString(text[:scan])
+					if !unicode.IsUpper(prev) {
+						break
+					}
+					count++
+					scan -= prevSize
+				}
+				if count >= 2 {
+					acroParenDepth = parenDepth
+				}
+			}
 		} else if r == ')' && parenDepth > 0 {
+			if acroParenDepth == parenDepth {
+				acroParenDepth = 0
+			}
 			parenDepth--
 		}
 		if strings.ContainsRune(specials, r) {
 			if r == '!' && parenDepth > 0 {
+				idx += size
+				continue
+			}
+			if r == '\'' && acroParenDepth > 0 {
 				idx += size
 				continue
 			}
@@ -1826,7 +2190,9 @@ func findAcronymIndex(text string) int {
 			j++
 		}
 		if j-i >= 2 && j < len(text) && text[j] == '(' {
-			return i
+			if strings.IndexByte(text[j+1:], ')') != -1 {
+				return i
+			}
 		}
 		i = j
 	}
@@ -1937,12 +2303,14 @@ func splitCapsSegments(text string) []capsSegment {
 		if unicode.IsUpper(r) {
 			start := idx
 			count := 0
+			lastSize := 0
 			for idx < len(text) {
 				r2, size2 := utf8.DecodeRuneInString(text[idx:])
 				if !unicode.IsUpper(r2) {
 					break
 				}
 				count++
+				lastSize = size2
 				idx += size2
 			}
 			if count >= 3 {
@@ -1950,13 +2318,19 @@ func splitCapsSegments(text string) []capsSegment {
 				if start > 0 {
 					prev, _ = utf8.DecodeLastRuneInString(text[:start])
 				}
+				if unicode.IsLetter(prev) && unicode.IsLower(prev) {
+					buf.WriteString(text[start:idx])
+					continue
+				}
 				next := rune(0)
 				if idx < len(text) {
 					next, _ = utf8.DecodeRuneInString(text[idx:])
 				}
-				if (unicode.IsLetter(prev) && unicode.IsLower(prev)) || (unicode.IsLetter(next) && unicode.IsLower(next)) {
-					buf.WriteString(text[start:idx])
-					continue
+				if unicode.IsLetter(next) && unicode.IsLower(next) && lastSize > 0 {
+					if count > 3 {
+						buf.WriteString(text[start:idx])
+						continue
+					}
 				}
 				if buf.Len() > 0 {
 					segments = append(segments, capsSegment{text: buf.String()})
@@ -2039,6 +2413,34 @@ func escapeAndGlyphWithPrev(text string, prev rune) (string, rune) {
 			idx += 5
 			lastRune = '±'
 			continue
+		case strings.HasPrefix(slice, "textileRef:"):
+			scan := idx + len("textileRef:")
+			first := scan
+			for scan < len(text) {
+				r := rune(text[scan])
+				if r < '0' || r > '9' {
+					break
+				}
+				scan++
+			}
+			if scan > first && scan < len(text) && text[scan] == ':' {
+				scan++
+				second := scan
+				for scan < len(text) {
+					r := rune(text[scan])
+					if r < '0' || r > '9' {
+						break
+					}
+					scan++
+				}
+				if scan > second && scan < len(text) && text[scan] == ':' {
+					scan++
+					if strings.HasPrefix(text[scan:], "url") {
+						idx = scan + len("url")
+						continue
+					}
+				}
+			}
 		case strings.HasPrefix(slice, "..."):
 			builder.WriteString("&#8230;")
 			idx += 3
@@ -2052,17 +2454,35 @@ func escapeAndGlyphWithPrev(text string, prev rune) (string, rune) {
 		}
 		r, size := utf8.DecodeRuneInString(slice)
 		if r == '-' {
-			if idx > 0 && idx+1 < len(text) && text[idx-1] == ' ' && text[idx+1] == ' ' {
-				builder.WriteString("&#8211;")
-				idx += size
-				lastRune = '–'
-				continue
+			if idx+1 < len(text) && text[idx+1] == ' ' {
+				nextNonSpace := nextNonSpaceRune(text, idx+size+1)
+				if nextNonSpace != 0 && nextNonSpace != '-' {
+					if idx > 0 && text[idx-1] == ' ' {
+						builder.WriteString("&#8211;")
+						idx += size
+						lastRune = '–'
+						continue
+					}
+					if idx == 0 && hasTrailingDashSpace(text[idx+size:]) {
+						builder.WriteString("&#8211;")
+						idx += size
+						lastRune = '–'
+						continue
+					}
+				}
+			}
+			if idx+size == len(text) && idx > 0 && text[idx-1] == ' ' && strings.HasPrefix(text, "- ") {
+				inner := strings.TrimSpace(text[2:idx])
+				if inner != "" {
+					builder.WriteString("&#8211;")
+					idx += size
+					lastRune = '–'
+					continue
+				}
 			}
 		}
 		if r == 'x' || r == 'X' {
-			prevNon := prevNonSpaceRune(text, idx, lastNonSpace)
-			nextNon := nextNonSpaceRune(text, idx+size)
-			if isDimNumberChar(prevNon) && isDimNumberChar(nextNon) {
+			if shouldReplaceDimension(text, idx, size, lastNonSpace) {
 				builder.WriteString("&#215;")
 				idx += size
 				lastRune = '×'
@@ -2108,12 +2528,22 @@ func escapeAndGlyphWithPrev(text string, prev rune) (string, rune) {
 				continue
 			}
 			if (lastRune == 0 || unicode.IsSpace(lastRune)) && unicode.IsDigit(next) {
-				builder.WriteString("&#8217;")
+				if hasClosingSingleQuote(text, idx+size) {
+					builder.WriteString("&#8216;")
+				} else {
+					builder.WriteString("&#8217;")
+				}
 				idx += size
 				lastRune = '\''
 				continue
 			}
-			if isOpeningQuote(lastRune, next) {
+			if lastRune == '=' {
+				builder.WriteString("&#8217;")
+			} else if (lastRune == '"' || lastRune == '“' || lastRune == '”') && (unicode.IsLetter(next) || unicode.IsDigit(next)) {
+				builder.WriteString("&#8216;")
+			} else if next == '[' || next == '(' || next == '{' {
+				builder.WriteString("&#8216;")
+			} else if isOpeningQuote(lastRune, next) {
 				builder.WriteString("&#8216;")
 			} else {
 				builder.WriteString("&#8217;")
@@ -2281,6 +2711,24 @@ func isDimNumberChar(r rune) bool {
 	}
 }
 
+func shouldReplaceDimension(text string, idx int, size int, fallback rune) bool {
+	if disableGlyphs {
+		return false
+	}
+	prevIdx, prevNon, _ := prevNonSpaceIndex(text, idx, fallback)
+	nextNon := nextNonSpaceRune(text, idx+size)
+	if !isDimNumberChar(prevNon) || !isDimNumberChar(nextNon) {
+		return false
+	}
+	if prevIdx > 0 {
+		prevPrev, _ := utf8.DecodeLastRuneInString(text[:prevIdx])
+		if unicode.IsLetter(prevPrev) && prevPrev != 'x' && prevPrev != 'X' && prevPrev != '×' {
+			return false
+		}
+	}
+	return true
+}
+
 func prevNonSpaceRune(text string, idx int, fallback rune) rune {
 	for idx > 0 {
 		r, size := utf8.DecodeLastRuneInString(text[:idx])
@@ -2290,6 +2738,17 @@ func prevNonSpaceRune(text string, idx int, fallback rune) rune {
 		idx -= size
 	}
 	return fallback
+}
+
+func prevNonSpaceIndex(text string, idx int, fallback rune) (int, rune, int) {
+	for idx > 0 {
+		r, size := utf8.DecodeLastRuneInString(text[:idx])
+		if !unicode.IsSpace(r) {
+			return idx - size, r, size
+		}
+		idx -= size
+	}
+	return -1, fallback, 0
 }
 
 func nextNonSpaceRune(text string, idx int) rune {
@@ -2324,6 +2783,11 @@ func isValidLang(lang string) bool {
 func isAlphaNumeric(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
+
+func hasTrailingDashSpace(text string) bool {
+	return strings.Contains(text, " -")
+}
+
 
 func isOpeningQuote(prev, next rune) bool {
 	if prev == 0 {
@@ -2391,16 +2855,20 @@ func quoteEntity(r rune, prev, next rune) string {
 		}
 		return "&#8221;"
 	}
-	if prev == '"' || prev == '“' || prev == '”' {
-		if unicode.IsLetter(next) {
-			return "&#8216;"
-		}
+	if (prev == '"' || prev == '“' || prev == '”') && (unicode.IsLetter(next) || unicode.IsDigit(next)) {
+		return "&#8216;"
+	}
+	if prev == '=' {
+		return "&#8217;"
 	}
 	if isAlphaNumeric(prev) && isAlphaNumeric(next) {
 		return "&#8217;"
 	}
 	if (prev == 0 || unicode.IsSpace(prev)) && unicode.IsDigit(next) {
 		return "&#8217;"
+	}
+	if next == '[' || next == '(' || next == '{' {
+		return "&#8216;"
 	}
 	if isOpeningQuote(prev, next) {
 		return "&#8216;"

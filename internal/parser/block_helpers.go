@@ -41,12 +41,82 @@ func containsBlockTag(lines []string) bool {
 				break
 			}
 			pos += idx
+			if isInsideCodeSpan(line, pos) {
+				idx = pos + 1
+				continue
+			}
 			tag := line[pos:]
-			name := htmlTagName(tag)
+			if !isHtmlTagStart(tag) {
+				idx = pos + 1
+				continue
+			}
+			end := strings.Index(tag, ">")
+			if end == -1 {
+				idx = pos + 1
+				continue
+			}
+			tagSegment := tag[:end+1]
+			if strings.Contains(tagSegment[1:], "<") {
+				idx = pos + 1
+				continue
+			}
+			if strings.HasPrefix(strings.TrimSpace(tagSegment), "</") {
+				idx = pos + 1
+				continue
+			}
+			name := htmlTagName(tagSegment)
 			if name != "" && !isInlineTagName(name) {
 				return true
 			}
 			idx = pos + 1
+		}
+	}
+	return false
+}
+
+func isInsideCodeSpan(line string, pos int) bool {
+	if pos <= 0 {
+		return false
+	}
+	count := 0
+	for i := 0; i < pos; i++ {
+		if line[i] == '@' {
+			count++
+		}
+	}
+	if count%2 == 0 {
+		return false
+	}
+	return strings.IndexByte(line[pos:], '@') != -1
+}
+
+func containsClosingBlockTag(lines []string) bool {
+	for _, line := range lines {
+		idx := 0
+		for idx < len(line) {
+			pos := strings.Index(line[idx:], "</")
+			if pos == -1 {
+				break
+			}
+			pos += idx
+			if pos > 0 {
+				prev, _ := utf8.DecodeLastRuneInString(line[:pos])
+				if unicode.IsLetter(prev) || unicode.IsDigit(prev) {
+					idx = pos + 2
+					continue
+				}
+			}
+			end := strings.Index(line[pos:], ">")
+			if end == -1 {
+				break
+			}
+			end += pos
+			tag := line[pos : end+1]
+			name := htmlTagName(tag)
+			if name != "" && !isInlineTagName(name) {
+				return true
+			}
+			idx = end + 1
 		}
 	}
 	return false

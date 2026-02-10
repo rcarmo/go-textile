@@ -21,6 +21,7 @@ func TextileToHtmlWithOptions(text string, options Options) (string, error) {
 		RawBlocks:           options.RawBlocks,
 		BlockTags:           options.BlockTags,
 		HTML5:               options.HTML5,
+		NoGlyphs:            options.NoGlyphs,
 	}
 	doc, err := parser.ParseDocument(text, parserOptions)
 	return doc.ToHtml(), err

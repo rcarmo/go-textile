@@ -17,6 +17,7 @@ type fixtureEntry struct {
 	Setup    []map[string]interface{} `yaml:"setup"`
 	Assert   string                   `yaml:"assert"`
 	Doctype  string                   `yaml:"doctype"`
+	Class    string                   `yaml:"class"`
 }
 
 func TestFixtures(t *testing.T) {
@@ -56,6 +57,9 @@ func TestFixtures(t *testing.T) {
 				return
 			}
 			fixtureOptions := optionsFromSetup(entry.Setup)
+			if strings.Contains(entry.Class, "DisableSymbols") {
+				fixtureOptions.NoGlyphs = true
+			}
 			if strings.EqualFold(entry.Doctype, "html5") {
 				fixtureOptions.HTML5 = true
 			}
@@ -104,6 +108,11 @@ func optionsFromSetup(setup []map[string]interface{}) Options {
 				options.RawBlocks = toBool(value)
 			case "setBlockTags":
 				options.BlockTags = toBool(value)
+			case "class":
+				className := toString(value)
+				if strings.Contains(className, "DisableSymbols") {
+					options.NoGlyphs = true
+				}
 			}
 		}
 	}

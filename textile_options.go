@@ -14,6 +14,7 @@ type Options struct {
 	RawBlocks           bool
 	BlockTags           bool
 	HTML5               bool
+	NoGlyphs            bool
 }
 
 // DefaultOptions returns the baseline php-textile-compatible defaults.

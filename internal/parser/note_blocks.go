@@ -44,6 +44,8 @@ func parseNoteDefinition(blk block, options Options) bool {
 	if !ok {
 		def = &noteDef{label: label}
 		noteDefs[label] = def
+	}
+	if def.order == 0 {
 		noteDefOrder = append(noteDefOrder, label)
 		noteDefSeqNum++
 		def.order = noteDefSeqNum
@@ -161,9 +163,11 @@ func buildNoteListItem(def *noteDef, marker string, noBacklinks bool, singleBack
 				li.AddChild(document.Text(" ", true))
 			}
 		}
-		if def.defined && !noteNoLinks {
+		if def.defined {
 			span := document.New("span")
-			span.Attr = map[string]string{"id": "note"}
+			if !noteNoLinks {
+				span.Attr = map[string]string{"id": "note"}
+			}
 			span.AddChild(document.Text(" ", true))
 			li.AddChild(span)
 		}

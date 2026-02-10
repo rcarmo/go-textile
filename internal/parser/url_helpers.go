@@ -36,6 +36,19 @@ func splitHostPath(rest string) (string, string) {
 	return rest[:idx], rest[idx:]
 }
 
+func shouldApplyPrefix(url string) bool {
+	if url == "" {
+		return false
+	}
+	if strings.HasPrefix(url, "//") || strings.HasPrefix(url, "/") || strings.HasPrefix(url, "./") || strings.HasPrefix(url, "../") || strings.HasPrefix(url, "#") {
+		return false
+	}
+	if _, _, ok := splitScheme(url); ok {
+		return false
+	}
+	return true
+}
+
 func encodeURLFragment(text string, options Options, allowPlus bool, allowColon bool, allowAmp bool, allowEquals bool) string {
 	safe := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
 	if allowPlus {

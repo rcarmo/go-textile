@@ -1,35 +1,39 @@
 # Tasks
 
-## Plan: Vendor php-textile tests + extend Go renderer
+## Project status
+- Fixture suite is fully vendored and green.
+- Parser refactor is complete and stdlib-first.
+- Remaining work is maintenance and future feature parity checks if new fixtures are added.
 
+## Completed milestones
 ### 1) Vendor test suite
-- [x] Add php-textile fixtures under a local path (e.g., `test/fixtures/`).
-- [x] Include any referenced assets (e.g., images) needed by tests.
-- [x] Document the source/version of the vendored tests.
+- [x] Add php-textile fixtures under `test/fixtures/`.
+- [x] Include referenced assets (e.g., `test/10x10.gif`).
+- [x] Document source/version in `test/fixtures/README.md`.
 
 ### 2) Repository organization
-- [x] Define a stable layout (e.g., `cmd/`, `internal/`, `pkg/`, `test/`).
-- [x] Move current code into the new structure with updated imports.
-- [x] Keep public API surface stable (or document any changes).
+- [x] Stabilize layout (`internal/`, `parser/`, `document/`, `test/`).
+- [x] Move code with updated imports and module path.
+- [x] Preserve the public API or document changes.
 
 ### 3) Test harness
-- [x] Parse YAML fixtures and run subtests for each case.
-- [x] Support fixture setup options (e.g., `setLite`, `setRestricted`, etc.).
-- [x] Provide clear failure diffs for expected vs. actual output.
+- [x] Parse YAML fixtures with subtests.
+- [x] Support fixture setup options (lite/restricted/etc.).
+- [x] Provide clear expected vs. actual diffs.
 
 ### 4) Parser refactor (stdlib-first)
-- [ ] Replace regex-heavy parsing with stdlib tools (bufio.Scanner, text/scanner, strings.Reader).
-- [ ] Introduce tokenization (block/inline) using stdlib scanning.
-- [ ] Ensure parser structure supports Textile-specific constructs without regex reliance.
+- [x] Replace regex-heavy parsing with stdlib scanning.
+- [x] Tokenize block/inline structures without regex reliance.
+- [x] Preserve Textile-specific constructs.
 
-### 5) Feature implementation (iterative)
-- [ ] Block parsing parity (headers, lists, tables, blockquotes, code/pre, etc.).
-- [ ] Phrase/inline parsing parity (emphasis, strong, code, links, images, glyphs).
-- [ ] Attributes, classes/IDs, styles, alignment, and dimension handling.
-- [ ] Raw HTML passthrough and restricted/lite modes.
-- [ ] Link/image policies, rel handling, and prefixes.
-- [ ] Line wrapping behavior and paragraph handling.
+### 5) Feature parity
+- [x] Block parsing parity (headers, lists, tables, blockquotes, code/pre).
+- [x] Inline parsing parity (emphasis, strong, code, links, images, glyphs).
+- [x] Attributes, classes/IDs, styles, alignment, dimensions.
+- [x] Raw HTML passthrough and restricted/lite modes.
+- [x] Link/image policies, rel handling, prefixes.
+- [x] Line wrapping and paragraph handling.
 
 ### 6) Verification
-- [ ] Run full fixture suite locally.
-- [ ] Track passing/failing fixtures and iterate until green.
+- [x] Run full fixture suite locally.
+- [x] Confirm all fixtures are green.

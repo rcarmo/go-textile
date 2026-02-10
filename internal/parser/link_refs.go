@@ -1,0 +1,24 @@
+package parser
+
+import "strings"
+
+func collectLinkRefs(lines []string) ([]string, map[string]string) {
+	refs := map[string]string{}
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			end := strings.Index(trimmed, "]")
+			if end > 1 {
+				label := trimmed[1:end]
+				rest := strings.TrimSpace(trimmed[end+1:])
+				if rest != "" && !strings.Contains(rest, " ") {
+					refs[label] = rest
+					continue
+				}
+			}
+		}
+		filtered = append(filtered, line)
+	}
+	return filtered, refs
+}

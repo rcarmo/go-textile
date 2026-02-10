@@ -1,171 +1,163 @@
 package gotextile
 
 import (
-	"log"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 
-	"launchpad.net/gocheck"
+	"gopkg.in/yaml.v3"
 )
 
-func Test(t *testing.T) { gocheck.TestingT(t) }
-
-type TestSuite struct {}
-
-var _ = gocheck.Suite(&TestSuite{})
-
-type TestCase struct {
-	Source string
-	Expected string
+type fixtureEntry struct {
+	Input    string                   `yaml:"input"`
+	Expect   string                   `yaml:"expect"`
+	Setup    []map[string]interface{} `yaml:"setup"`
+	Assert   string                   `yaml:"assert"`
+	Doctype  string                   `yaml:"doctype"`
 }
 
-var tests = []TestCase{
-	TestCase{
-		`p. paragraph`,
-		`<p>paragraph</p>`,
-	},
-	TestCase{
-		`p. paragraph
-next line`,
-		`<p>paragraph<br>next line</p>`,
-	},
-	TestCase{
-		`paragraph`,
-		`<p>paragraph</p>`,
-	},
-	TestCase{
-		`with entities < " ' >`,
-		`<p>with entities &lt; &#34; &#39; &gt;</p>`,
-	},
-	TestCase{
-		`_emphasis_ __italic__ *strong* **bold** ^sup^ ~sub~`,
-		`<p><em>emphasis</em> <i>italic</i> <strong>strong</strong> <b>bold</b> <sup>sup</sup> <sub>sub</sub></p>`,
-	},
-	TestCase{
-		`e[_m_]phasis i[__t__]alic s[*t*]rong b[**o**]ld s[^u^]p s[~u~]b`,
-		`<p>e<em>m</em>phasis i<i>t</i>alic s<strong>t</strong>rong b<b>o</b>ld s<sup>u</sup>p s<sub>u</sub>b</p>`,
-	},
-	TestCase{
-		`e_m_phasis i__t__alic s*t*rong b**old** s^u^p s~u~b`,
-		`<p>e_m_phasis i__t__alic s*t*rong b**old** s^u^p s~u~b</p>`,
-	},
-	TestCase{
-		`*strong strong* *stron*g strong* strong*`,
-		`<p><strong>strong strong</strong> <strong>stron*g strong</strong> strong*</p>`,
-	},
-	TestCase{
-		`_emphasis emphasis_ _emphasi_s emphasis_ emphasis_`,
-		`<p><em>emphasis emphasis</em> <em>emphasi_s emphasis</em> emphasis_</p>`,
-	},
-	TestCase{
-		`@code code@ c@o@de @cod@e code@ code@`,
-		`<p><code>code code</code> c@o@de <code>cod@e code</code> code@</p>`,
-	},
-	TestCase{
-		`h1. paragraph`,
-		`<h1>paragraph</h1>`,
-	},
-	TestCase{
-		`h1. paragraph
-next line`,
-		`<h1>paragraph<br>next line</h1>`,
-	},
-	TestCase{
-		`* list`,
-		`<ul><li>list</li></ul>`,
-	},
-	TestCase{
-		`* list1
-* list2`,
-		`<ul><li>list1</li><li>list2</li></ul>`,
-	},
-	TestCase{
-		`* list1
-** list1.1
-** list1.2
-* list2`,
-		`<ul><li>list1<ul><li>list1.1</li><li>list1.2</li></ul></li><li>list2</li></ul>`,
-	},
-	TestCase{
-		`** list1.1
-** list1.2
-* list2`,
-		`<ul><li><ul><li>list1.1</li><li>list1.2</li></ul></li><li>list2</li></ul>`,
-	},
-	TestCase{
-		`# list`,
-		`<ol><li>list</li></ol>`,
-	},
-	TestCase{
-		`# list1
-# list2`,
-		`<ol><li>list1</li><li>list2</li></ol>`,
-	},
-	TestCase{
-		`# list1
-## list1.1
-## list1.2
-# list2`,
-		`<ol><li>list1<ol><li>list1.1</li><li>list1.2</li></ol></li><li>list2</li></ol>`,
-	},
-	TestCase{
-		`## list1.1
-## list1.2
-# list2`,
-		`<ol><li><ol><li>list1.1</li><li>list1.2</li></ol></li><li>list2</li></ol>`,
-	},
-	TestCase{
-		`- name := definition`,
-		`<dl><dt>name</dt><dd>definition</dd></dl>`,
-	},
-	TestCase{
-		`- name1 := definition1
-- name2 := definition2`,
-		`<dl><dt>name1</dt><dd>definition1</dd><dt>name2</dt><dd>definition2</dd></dl>`,
-	},
-	TestCase{
-		`- name1 := definition1
-- name2 := definition2
-line2 =:`,
-		`<dl><dt>name1</dt><dd>definition1</dd><dt>name2</dt><dd>definition2<br>line2</dd></dl>`,
-	},
-	TestCase{
-		`bc. line1
-line2`,
-		`<pre><code>line1
-line2</code></pre>`,
-	},
-	TestCase{
-		`pre. line1
-line2`,
-		`<pre>line1
-line2</pre>`,
-	},
-	TestCase{
-		`###. line1
-line2`,
-		``,
-	},
-	TestCase{
-		`??cite??`,
-		`<p><cite>cite</cite></p>`,
-	},
-	TestCase{
-		`??cite1??
-??cite2??
--- Author`,
-		`<p><cite>cite1</cite><br><cite>cite2</cite><br>-- Author</p>`,
-	},
-	TestCase{
-		`|cell1.1|cell1.2|cell1.3|
-|cell2.1|cell2.2|cell2.3|`,
-		`<table><tr><td>cell1.1</td><td>cell1.2</td><td>cell1.3</td></tr><tr><td>cell2.1</td><td>cell2.2</td><td>cell2.3</td></tr></table>`,
-	},
-}
-
-func (s *TestSuite) TestTextile(c *gocheck.C) {
-	for _, t := range tests {
-		log.Printf("==== %#v ====", t.Source)
-		txt, _ := TextileToHtml(t.Source)
-		c.Assert(txt, gocheck.Equals, t.Expected, gocheck.Commentf(t.Source))
+func TestFixtures(t *testing.T) {
+	root := "test/fixtures"
+	filter := strings.TrimSpace(os.Getenv("TEXTILE_FIXTURE_FILTER"))
+	limit := toInt(os.Getenv("TEXTILE_FIXTURE_LIMIT"))
+	count := 0
+	files, err := filepath.Glob(filepath.Join(root, "*.yaml"))
+	if err != nil {
+		t.Fatalf("load fixtures: %v", err)
 	}
+	if len(files) == 0 {
+		t.Fatalf("no fixture files found in %s", root)
+	}
+	sort.Strings(files)
+	for _, file := range files {
+		content, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		entries := map[string]fixtureEntry{}
+		if err := yaml.Unmarshal(content, &entries); err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+		entryNames := make([]string, 0, len(entries))
+		for name := range entries {
+			entryNames = append(entryNames, name)
+		}
+		sort.Strings(entryNames)
+		for _, name := range entryNames {
+			entry := entries[name]
+			fixtureName := fmt.Sprintf("%s/%s", filepath.Base(file), name)
+			if filter != "" && !strings.Contains(fixtureName, filter) {
+				continue
+			}
+			if limit > 0 && count >= limit {
+				return
+			}
+			fixtureOptions := optionsFromSetup(entry.Setup)
+			if strings.EqualFold(entry.Doctype, "html5") {
+				fixtureOptions.HTML5 = true
+			}
+			fixtureAssert := strings.TrimSpace(entry.Assert)
+			count++
+			t.Run(fixtureName, func(t *testing.T) {
+				if fixtureAssert == "skip" {
+					t.Skip("fixture marked as skip")
+				}
+				input := normalizeFixture(entry.Input)
+				expect := normalizeFixture(entry.Expect)
+				actual, err := TextileToHtmlWithOptions(input, fixtureOptions)
+				if err != nil {
+					t.Fatalf("render: %v", err)
+				}
+				if expect != actual {
+					t.Errorf("unexpected output\n-- expected --\n%s\n-- actual --\n%s", expect, actual)
+				}
+			})
+		}
+	}
+}
+
+func optionsFromSetup(setup []map[string]interface{}) Options {
+	options := DefaultOptions()
+	for _, item := range setup {
+		for key, value := range item {
+			switch key {
+			case "setLite":
+				options.Lite = toBool(value)
+			case "setRestricted":
+				options.Restricted = toBool(value)
+			case "setImages":
+				options.Images = toBool(value)
+			case "setDimensionlessImages":
+				options.DimensionlessImages = toBool(value)
+			case "setLinkRelationShip":
+				options.LinkRelationship = toString(value)
+			case "setLinkPrefix":
+				options.LinkPrefix = toString(value)
+			case "setImagePrefix":
+				options.ImagePrefix = toString(value)
+			case "setLineWrap":
+				options.LineWrap = toInt(value)
+			case "setRawBlocks":
+				options.RawBlocks = toBool(value)
+			case "setBlockTags":
+				options.BlockTags = toBool(value)
+			}
+		}
+	}
+	return options
+}
+
+func toBool(value interface{}) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		return strings.ToLower(v) == "true"
+	case int:
+		return v != 0
+	case int64:
+		return v != 0
+	case float64:
+		return v != 0
+	default:
+		return false
+	}
+}
+
+func toString(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+func toInt(value interface{}) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case string:
+		if v == "" {
+			return 0
+		}
+		var parsed int
+		_, _ = fmt.Sscanf(v, "%d", &parsed)
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func normalizeFixture(text string) string {
+	return strings.ReplaceAll(text, "\\x20", " ")
 }

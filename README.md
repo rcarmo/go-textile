@@ -2,7 +2,9 @@
 
 ![go-textile icon](docs/icon-256.png)
 
-A Go implementation of the Textile markup language with a stdlib-first parser and fixture-driven compatibility against the php-textile test suite. The renderer aims for parity with php-textile behavior without vendoring or invoking the PHP library.
+This is another of my "things that should exist" projects, aince Go never really had a full featured Textile markup parser. So I decided to take Github Copilot CLI, Codex and the php-textile test suite and steer things through to create a fully native Go implementation using (mostly) only stdlib tooling.
+
+The renderer aims for full parity with php-textile behavior and passes its rather grueling test suite, as well as rendering on par with the Python version.
 
 ## Features
 

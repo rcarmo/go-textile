@@ -1,5 +1,7 @@
 # go-textile
 
+![go-textile icon](docs/icon-256.png)
+
 A Go implementation of the Textile markup language with a stdlib-first parser and fixture-driven compatibility against the php-textile test suite. The renderer aims for parity with php-textile behavior without vendoring or invoking the PHP library.
 
 ## Features

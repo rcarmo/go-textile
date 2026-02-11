@@ -6,13 +6,13 @@
 - Remaining work is maintenance and future feature parity checks if new fixtures are added.
 
 ## Refactor opportunities
-- [ ] Unify inline attribute fragment scanning between block and link contexts.
-- [ ] Consolidate quote handling into a shared classifier to avoid drift.
-- [ ] Centralize dash/en-dash glyph conversion logic.
-- [ ] Share URL sanitization policy logic across link/image helpers.
-- [ ] Factor HTML tag scanning for block detection and wrapper parsing.
-- [ ] Reuse table cell parsing logic with standard inline parsing.
-- [ ] Extract note/footnote anchor construction helper.
+- [x] Unify inline attribute fragment scanning between block and link contexts.
+- [x] Consolidate quote handling into a shared classifier to avoid drift.
+- [x] Centralize dash/en-dash glyph conversion logic.
+- [x] Share URL sanitization policy logic across link/image helpers.
+- [x] Factor HTML tag scanning for block detection and wrapper parsing.
+- [x] Reuse table cell parsing logic with standard inline parsing.
+- [x] Extract note/footnote anchor construction helper.
 - [x] Extract restricted-comment escaping helper.
 
 ## Completed milestones

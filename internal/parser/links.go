@@ -6,50 +6,20 @@ import (
 )
 
 func parseInlineAttrSequence(text string, options Options) (map[string]string, string) {
-	attrs := map[string]string{}
 	original := strings.TrimLeft(text, " \t")
-	rest := original
-	fragments := []string{}
-	consumed := false
-	for strings.HasPrefix(rest, "(") || strings.HasPrefix(rest, "{") || strings.HasPrefix(rest, "[") {
-		fragment, remaining := extractInlineAttrFragment(rest)
-		if fragment == "" {
-			break
-		}
-		if options.Restricted && strings.HasPrefix(fragment, "(") && strings.Contains(fragment, " ") {
-			if len(fragments) == 0 {
-				return nil, original
-			}
-			rest = strings.TrimLeft(fragment+remaining, " \t")
-			break
-		}
-		fragments = append(fragments, fragment)
-		fragmentAttrs := parseAttributes(fragment, options)
-		if fragmentAttrs == nil {
-			if options.Restricted && (strings.HasPrefix(fragment, "(") || strings.HasPrefix(fragment, "{")) {
-				consumed = true
-				rest = strings.TrimLeft(remaining, " \t")
-				continue
-			}
-			if len(attrs) == 0 && !consumed {
-				return nil, original
-			}
-			break
-		}
-		for k, v := range fragmentAttrs {
-			attrs[k] = v
-		}
-		consumed = true
-		if remaining == rest {
-			break
-		}
-		if len(remaining) > 0 && (remaining[0] == ' ' || remaining[0] == '\t') {
-			rest = strings.TrimLeft(remaining, " \t")
-			break
-		}
-		rest = remaining
+	scanResult := scanInlineAttrFragments(original, options, inlineAttrScanConfig{
+		stopOnRestrictedParenSpace: true,
+		stopOnSpaceAfterFragment:   true,
+		failOnEmptyFirst:           false,
+		appendRestrictedFragment:   true,
+	})
+	if scanResult.hardFail {
+		return nil, original
 	}
-	rest = strings.TrimLeft(rest, " \t")
+	attrs := scanResult.attrs
+	rest := scanResult.rest
+	fragments := scanResult.fragments
+	consumed := scanResult.consumed
 	if len(fragments) > 1 {
 		allParen := true
 		for _, fragment := range fragments {
@@ -211,10 +181,21 @@ func isAllowedSchemeRestricted(url string) bool {
 	return !strings.Contains(lower, ":")
 }
 
-func sanitizeURL(url string, options Options) string {
+type urlSanitizePolicy struct {
+	sanitizeAlways bool
+}
+
+func sanitizeURLWithPolicy(url string, options Options, policy urlSanitizePolicy) string {
 	if url == "" {
 		return url
 	}
+	if !policy.sanitizeAlways && !options.Restricted {
+		return url
+	}
+	return sanitizeURLCore(url, options)
+}
+
+func sanitizeURLCore(url string, options Options) string {
 	if options.Restricted {
 		url = strings.ReplaceAll(url, "<", "&lt;")
 		url = strings.ReplaceAll(url, ">", "&gt;")
@@ -240,6 +221,10 @@ func sanitizeURL(url string, options Options) string {
 	}
 }
 
+func sanitizeURL(url string, options Options) string {
+	return sanitizeURLWithPolicy(url, options, urlSanitizePolicy{sanitizeAlways: true})
+}
+
 func sanitizeFileURL(rest string, options Options) string {
 	if strings.HasPrefix(rest, "//") {
 		host, path := splitHostPath(rest[2:])
@@ -252,10 +237,7 @@ func sanitizeFileURL(rest string, options Options) string {
 }
 
 func sanitizeImageURL(url string, options Options) string {
-	if options.Restricted {
-		return sanitizeURL(url, options)
-	}
-	return url
+	return sanitizeURLWithPolicy(url, options, urlSanitizePolicy{sanitizeAlways: false})
 }
 
 func displayURL(url string) string {

@@ -151,13 +151,11 @@ func buildNoteListItem(def *noteDef, marker string, noBacklinks bool, singleBack
 				markerRune, _ := utf8.DecodeRuneInString(marker)
 				markerText = string(markerRune + rune(i))
 			}
-			sup := document.New("sup")
-			link := document.New("a")
+			href := ""
 			if def.defined && !noteNoLinks {
-				link.Attr = map[string]string{"href": "#noteref"}
+				href = "#noteref"
 			}
-			link.AddChild(document.Text(markerText, true))
-			sup.AddChild(link)
+			sup, _ := buildSupLink(document.Text(markerText, true), href, nil, true)
 			li.AddChild(sup)
 			if i < count-1 {
 				li.AddChild(document.Text(" ", true))

@@ -34,41 +34,14 @@ func hasLeadingWhitespace(line string) bool {
 
 func containsBlockTag(lines []string) bool {
 	for _, line := range lines {
-		idx := 0
-		for idx < len(line) {
-			pos := strings.Index(line[idx:], "<")
-			if pos == -1 {
-				break
+		if scanHTMLTags(line, func(tag string, _ int, closing bool) bool {
+			if closing {
+				return false
 			}
-			pos += idx
-			if isInsideCodeSpan(line, pos) {
-				idx = pos + 1
-				continue
-			}
-			tag := line[pos:]
-			if !isHtmlTagStart(tag) {
-				idx = pos + 1
-				continue
-			}
-			end := strings.Index(tag, ">")
-			if end == -1 {
-				idx = pos + 1
-				continue
-			}
-			tagSegment := tag[:end+1]
-			if strings.Contains(tagSegment[1:], "<") {
-				idx = pos + 1
-				continue
-			}
-			if strings.HasPrefix(strings.TrimSpace(tagSegment), "</") {
-				idx = pos + 1
-				continue
-			}
-			name := htmlTagName(tagSegment)
-			if name != "" && !isInlineTagName(name) {
-				return true
-			}
-			idx = pos + 1
+			name := htmlTagName(tag)
+			return name != "" && !isInlineTagName(name)
+		}) {
+			return true
 		}
 	}
 	return false
@@ -90,33 +63,59 @@ func isInsideCodeSpan(line string, pos int) bool {
 	return strings.IndexByte(line[pos:], '@') != -1
 }
 
+func scanHTMLTags(line string, handler func(tag string, start int, closing bool) bool) bool {
+	idx := 0
+	for idx < len(line) {
+		pos := strings.Index(line[idx:], "<")
+		if pos == -1 {
+			break
+		}
+		pos += idx
+		if isInsideCodeSpan(line, pos) {
+			idx = pos + 1
+			continue
+		}
+		tag := line[pos:]
+		if !isHtmlTagStart(tag) {
+			idx = pos + 1
+			continue
+		}
+		end := strings.Index(tag, ">")
+		if end == -1 {
+			break
+		}
+		end += pos
+		tagSegment := line[pos : end+1]
+		if strings.Contains(tagSegment[1:], "<") {
+			idx = pos + 1
+			continue
+		}
+		trimmed := strings.TrimSpace(tagSegment)
+		closing := strings.HasPrefix(trimmed, "</")
+		if handler(tagSegment, pos, closing) {
+			return true
+		}
+		idx = end + 1
+	}
+	return false
+}
+
 func containsClosingBlockTag(lines []string) bool {
 	for _, line := range lines {
-		idx := 0
-		for idx < len(line) {
-			pos := strings.Index(line[idx:], "</")
-			if pos == -1 {
-				break
+		if scanHTMLTags(line, func(tag string, start int, closing bool) bool {
+			if !closing {
+				return false
 			}
-			pos += idx
-			if pos > 0 {
-				prev, _ := utf8.DecodeLastRuneInString(line[:pos])
+			if start > 0 {
+				prev, _ := utf8.DecodeLastRuneInString(line[:start])
 				if unicode.IsLetter(prev) || unicode.IsDigit(prev) {
-					idx = pos + 2
-					continue
+					return false
 				}
 			}
-			end := strings.Index(line[pos:], ">")
-			if end == -1 {
-				break
-			}
-			end += pos
-			tag := line[pos : end+1]
 			name := htmlTagName(tag)
-			if name != "" && !isInlineTagName(name) {
-				return true
-			}
-			idx = end + 1
+			return name != "" && !isInlineTagName(name)
+		}) {
+			return true
 		}
 	}
 	return false

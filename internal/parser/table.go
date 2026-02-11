@@ -100,7 +100,7 @@ func parseTableBlock(lines []string, options Options) (*document.D, error) {
 			}
 			continue
 		}
-		if pipeCount == 1 && (strings.HasPrefix(trimmedLine, "|^") || strings.HasPrefix(trimmedLine, "|~") || strings.HasPrefix(trimmedLine, "|-") ) {
+		if pipeCount == 1 && (strings.HasPrefix(trimmedLine, "|^") || strings.HasPrefix(trimmedLine, "|~") || strings.HasPrefix(trimmedLine, "|-")) {
 			if err := flushRow(); err != nil {
 				return table, err
 			}
@@ -237,25 +237,15 @@ func parseTableCell(cell string, options Options) (*document.D, error) {
 	}
 	if strings.Contains(working, "\n") {
 		lines := strings.Split(working, "\n")
-		if idx := firstListLineIndex(lines); idx > 0 {
-			prefixLines := lines[:idx]
-			listLines := lines[idx:]
-			list, err := parseListLines(listLines, options)
-			if err != nil {
-				return nil, err
-			}
-			if list != nil {
-				inlineNode, err := parseInlineLines(prefixLines, "inline", nil, options)
-				if err != nil {
-					return nil, err
-				}
-				cell := document.New(tag)
-				cell.Attr = attrs
-				cell.Children = append(cell.Children, inlineNode.Children...)
-				cell.AddChild(&document.D{Tag: "br"})
-				cell.AddChild(list)
-				return cell, nil
-			}
+		if cell, ok, err := parseInlineWithListSuffix(lines, options, inlineListJoinConfig{
+			tag:                tag,
+			attrs:              attrs,
+			joiner:             &document.D{Tag: "br"},
+			addJoinerWhenEmpty: true,
+		}); err != nil {
+			return nil, err
+		} else if ok {
+			return cell, nil
 		}
 		trimmedContent := strings.TrimSpace(working)
 		if isListStart(trimmedContent, '*') || isListStart(trimmedContent, '#') {
@@ -273,7 +263,7 @@ func parseTableCell(cell string, options Options) (*document.D, error) {
 			}
 			return cell, nil
 		}
-		if (strings.HasPrefix(trimmedContent, ";") || strings.HasPrefix(trimmedContent, ":")) {
+		if strings.HasPrefix(trimmedContent, ";") || strings.HasPrefix(trimmedContent, ":") {
 			dl, err := parseClassicDefinitionList(strings.Split(working, "\n"), options)
 			if err != nil {
 				return nil, err

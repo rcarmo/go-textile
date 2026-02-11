@@ -51,19 +51,19 @@ type noteRefNode struct {
 }
 
 var (
-	footnoteRefs  map[string]int
-	linkRefs      map[string]string
-	noteDefs      map[string]*noteDef
-	noteRefOrder  []string
-	noteIndex     map[string]int
-	noteDefOrder  []string
-	noteDefSeqNum   int
-	noteRefNodes             map[string][]noteRefNode
-	noteListSpecs            []noteListSpec
-	noteNoLinks              bool
-	restrictedParsing        bool
-	disableGlyphs            bool
-	lastOrderedIndexByLevel  map[int]int
+	footnoteRefs            map[string]int
+	linkRefs                map[string]string
+	noteDefs                map[string]*noteDef
+	noteRefOrder            []string
+	noteIndex               map[string]int
+	noteDefOrder            []string
+	noteDefSeqNum           int
+	noteRefNodes            map[string][]noteRefNode
+	noteListSpecs           []noteListSpec
+	noteNoLinks             bool
+	restrictedParsing       bool
+	disableGlyphs           bool
+	lastOrderedIndexByLevel map[int]int
 )
 
 func ParseDocument(text string, options Options) (*document.D, error) {
@@ -393,23 +393,15 @@ func parseBlock(blk block, options Options) (*document.D, error) {
 		}
 	}
 	if idx := firstListLineIndex(blk.Lines); idx > 0 && !strings.HasPrefix(trimmed, "|") && !strings.HasPrefix(trimmed, "table") {
-		prefixLines := blk.Lines[:idx]
-		listLines := blk.Lines[idx:]
-		inlineNode, err := parseInlineLines(prefixLines, "inline", nil, options)
+		container, ok, err := parseInlineWithListSuffix(blk.Lines, options, inlineListJoinConfig{
+			tag:                "inline",
+			joiner:             document.Text("\n", true),
+			addJoinerWhenEmpty: false,
+		})
 		if err != nil {
 			return nil, err
 		}
-		listNode, err := parseListLines(listLines, options)
-		if err != nil {
-			return nil, err
-		}
-		if listNode != nil {
-			container := document.New("inline")
-			container.Children = append(container.Children, inlineNode.Children...)
-			if len(inlineNode.Children) > 0 {
-				container.AddChild(document.Text("\n", true))
-			}
-			container.AddChild(listNode)
+		if ok {
 			return container, nil
 		}
 	}
@@ -778,7 +770,6 @@ func parseDefinitionList(lines []string, options Options) (*document.D, error) {
 	return dl, nil
 }
 
-
 func isListStart(line string, marker rune) bool {
 	markers, _, _, _, ok := parseListMarkers(line)
 	if !ok || markers == "" {
@@ -1029,7 +1020,6 @@ func parseInline(text string, tag string, attrs map[string]string, options Optio
 			}
 		}
 		if r == '-' {
-			size := utf8.RuneLen(r)
 			if strings.HasPrefix(text[idx:], "--") {
 				prevRune = addTextNodes(node, "--", prevRune)
 				idx += 2
@@ -1043,25 +1033,11 @@ func parseInline(text string, tag string, attrs map[string]string, options Optio
 			if idx+1 < len(text) {
 				next, _ = utf8.DecodeRuneInString(text[idx+1:])
 			}
-			if next == ' ' {
-				nextNonSpace := nextNonSpaceRune(text, idx+size+1)
-				if nextNonSpace != 0 && nextNonSpace != '-' {
-					if prev == ' ' || (prev == 0 && hasTrailingDashSpace(text[idx+size:])) {
-						node.AddChild(document.Text("&#8211;", true))
-						prevRune = '–'
-						idx++
-						continue
-					}
-				}
-			}
-			if next == 0 && prev == ' ' && strings.HasPrefix(text, "- ") {
-				inner := strings.TrimSpace(text[2:idx])
-				if inner != "" {
-					node.AddChild(document.Text("&#8211;", true))
-					prevRune = '–'
-					idx++
-					continue
-				}
+			if entity, advance, last, ok := maybeEnDash(text, idx, prev); ok {
+				node.AddChild(document.Text(entity, true))
+				prevRune = last
+				idx += advance
+				continue
 			}
 			if prev != '*' && prev != '_' {
 				if !isAlphaNumeric(prev) && (isAlphaNumeric(next) || next == '(' || next == '[' || next == '{') {
@@ -1113,18 +1089,7 @@ func parseInline(text string, tag string, attrs map[string]string, options Optio
 				if idx+size < len(text) {
 					nextRune, _ = utf8.DecodeRuneInString(text[idx+size:])
 				}
-				entity := ""
-				if r == '\'' && (prevRune == 0 || unicode.IsSpace(prevRune)) && unicode.IsDigit(nextRune) {
-					if hasClosingSingleQuote(text, idx+size) {
-						entity = "&#8216;"
-					} else {
-						entity = "&#8217;"
-					}
-				} else if r == '\'' && (nextRune == '[' || nextRune == '(' || nextRune == '{') {
-					entity = "&#8216;"
-				} else {
-					entity = quoteEntity(r, prevRune, nextRune)
-				}
+				entity := quoteEntityWithContext(r, prevRune, nextRune, text, idx)
 				node.AddChild(document.Text(entity, true))
 				prevRune = r
 				idx += size
@@ -1257,54 +1222,18 @@ func parseInlineAttributes(text string, options Options) (map[string]string, str
 			}
 		}
 	}
-	attrs := map[string]string{}
-	rest := trimmed
-	fragments := []string{}
-	consumed := false
-	for strings.HasPrefix(rest, "(") || strings.HasPrefix(rest, "{") || strings.HasPrefix(rest, "[") {
-		if strings.HasPrefix(rest, "[@") {
-			break
-		}
-		fragment, remaining := extractInlineAttrFragment(rest)
-		if fragment == "" {
-			break
-		}
-		fragmentAttrs := parseAttributes(fragment, options)
-		if fragmentAttrs == nil {
-			if options.Restricted && (strings.HasPrefix(fragment, "(") || strings.HasPrefix(fragment, "{")) {
-				rest = strings.TrimLeft(remaining, " \t")
-				consumed = true
-				continue
-			}
-			if len(fragments) == 0 && !consumed {
-				return nil, trimmed
-			}
-			if strings.HasPrefix(fragment, "[") {
-				inner := strings.TrimSuffix(strings.TrimPrefix(fragment, "["), "]")
-				if isBracketedPhrase(inner) {
-					rest = strings.TrimLeft(fragment+remaining, " \t")
-					break
-				}
-			}
-			if strings.TrimSpace(remaining) != "" {
-				rest = strings.TrimLeft(remaining, " \t")
-				continue
-			}
-			break
-		}
-		if strings.TrimSpace(remaining) == "" {
-			if len(fragments) == 0 {
-				return nil, trimmed
-			}
-			break
-		}
-		fragments = append(fragments, fragment)
-		for k, v := range fragmentAttrs {
-			attrs[k] = v
-		}
-		consumed = true
-		rest = strings.TrimLeft(remaining, " \t")
+	scanResult := scanInlineAttrFragments(trimmed, options, inlineAttrScanConfig{
+		allowCodeSpan:            true,
+		allowBracketedPhraseStop: true,
+		failOnEmptyFirst:         true,
+	})
+	if scanResult.hardFail || scanResult.emptyAfterFirst {
+		return nil, trimmed
 	}
+	attrs := scanResult.attrs
+	rest := scanResult.rest
+	fragments := scanResult.fragments
+	consumed := scanResult.consumed
 	if len(fragments) > 1 {
 		first := fragments[0][0]
 		allSame := true
@@ -1447,7 +1376,6 @@ func parseFootnoteRef(text string, idx int) (*document.D, int, bool) {
 		return nil, 0, false
 	}
 	unicodeOnly := !isDigits(payload)
-	sup := document.New("sup")
 	attrs := map[string]string{"class": "footnote"}
 	if !unicodeOnly && footnoteRefs != nil {
 		footnoteRefs[payload]++
@@ -1455,18 +1383,17 @@ func parseFootnoteRef(text string, idx int) (*document.D, int, bool) {
 			attrs["id"] = "fnrev"
 		}
 	}
-	sup.Attr = attrs
 	escaped, _ := escapeAndGlyphWithPrev(payload, 0)
+	child := document.Text(escaped, true)
 	if noLink {
-		sup.AddChild(document.Text(escaped, true))
+		sup, _ := buildSupLink(child, "", attrs, false)
 		return sup, end - idx + 1, true
 	}
-	link := document.New("a")
+	href := ""
 	if !unicodeOnly {
-		link.Attr = map[string]string{"href": "#fn"}
+		href = "#fn"
 	}
-	link.AddChild(document.Text(escaped, true))
-	sup.AddChild(link)
+	sup, _ := buildSupLink(child, href, attrs, true)
 	return sup, end - idx + 1, true
 }
 
@@ -1505,19 +1432,15 @@ func parseNoteRef(text string, idx int) (*document.D, int, bool) {
 	def.referenced = true
 	def.index = index
 	def.refCount++
-	sup := document.New("sup")
 	span := document.New("span")
 	span.Attr = map[string]string{"id": "noteref"}
 	span.AddChild(document.Text(strconv.Itoa(index), true))
-	var link *document.D
-	if noLink {
-		sup.AddChild(span)
-	} else {
-		link = document.New("a")
-		link.Attr = map[string]string{"href": "#note"}
-		link.AddChild(span)
-		sup.AddChild(link)
+	href := ""
+	forceLink := !noLink
+	if !noLink {
+		href = "#note"
 	}
+	sup, link := buildSupLink(span, href, nil, forceLink)
 	noteRefNodes[label] = append(noteRefNodes[label], noteRefNode{sup: sup, link: link, span: span, noLink: noLink})
 	return sup, end - idx + 1, true
 }
@@ -2177,8 +2100,8 @@ func nextSpecialIndex(text string, idx int) int {
 }
 
 type capsSegment struct {
-	text  string
-	caps  bool
+	text string
+	caps bool
 }
 
 func findAcronymIndex(text string) int {
@@ -2455,31 +2378,11 @@ func escapeAndGlyphWithPrev(text string, prev rune) (string, rune) {
 		}
 		r, size := utf8.DecodeRuneInString(slice)
 		if r == '-' {
-			if idx+1 < len(text) && text[idx+1] == ' ' {
-				nextNonSpace := nextNonSpaceRune(text, idx+size+1)
-				if nextNonSpace != 0 && nextNonSpace != '-' {
-					if idx > 0 && text[idx-1] == ' ' {
-						builder.WriteString("&#8211;")
-						idx += size
-						lastRune = '–'
-						continue
-					}
-					if idx == 0 && hasTrailingDashSpace(text[idx+size:]) {
-						builder.WriteString("&#8211;")
-						idx += size
-						lastRune = '–'
-						continue
-					}
-				}
-			}
-			if idx+size == len(text) && idx > 0 && text[idx-1] == ' ' && strings.HasPrefix(text, "- ") {
-				inner := strings.TrimSpace(text[2:idx])
-				if inner != "" {
-					builder.WriteString("&#8211;")
-					idx += size
-					lastRune = '–'
-					continue
-				}
+			if entity, advance, last, ok := maybeEnDash(text, idx, lastRune); ok {
+				builder.WriteString(entity)
+				idx += advance
+				lastRune = last
+				continue
 			}
 		}
 		if r == 'x' || r == 'X' {
@@ -2491,66 +2394,14 @@ func escapeAndGlyphWithPrev(text string, prev rune) (string, rune) {
 				continue
 			}
 		}
-		if r == '"' {
+		if r == '"' || r == '\'' {
 			next := rune(0)
 			if idx+size < len(text) {
 				next, _ = utf8.DecodeRuneInString(text[idx+size:])
 			}
-			if lastRune == '\'' && next == '\'' {
-				builder.WriteString("&quot;")
-				idx += size
-				lastRune = r
-				continue
-			}
-			if isLiteralQuoteContext(lastRune, next) {
-				builder.WriteString("&quot;")
-				idx += size
-				lastRune = r
-				continue
-			}
-			if isOpeningQuote(lastRune, next) {
-				builder.WriteString("&#8220;")
-			} else {
-				builder.WriteString("&#8221;")
-			}
+			builder.WriteString(quoteEntityWithContext(r, lastRune, next, text, idx))
 			idx += size
 			lastRune = r
-			continue
-		}
-		if r == '\'' {
-			next := rune(0)
-			if idx+size < len(text) {
-				next, _ = utf8.DecodeRuneInString(text[idx+size:])
-			}
-			if isAlphaNumeric(lastRune) && isAlphaNumeric(next) {
-				builder.WriteString("&#8217;")
-				idx += size
-				lastRune = '\''
-				continue
-			}
-			if (lastRune == 0 || unicode.IsSpace(lastRune)) && unicode.IsDigit(next) {
-				if hasClosingSingleQuote(text, idx+size) {
-					builder.WriteString("&#8216;")
-				} else {
-					builder.WriteString("&#8217;")
-				}
-				idx += size
-				lastRune = '\''
-				continue
-			}
-			if lastRune == '=' {
-				builder.WriteString("&#8217;")
-			} else if (lastRune == '"' || lastRune == '“' || lastRune == '”') && (unicode.IsLetter(next) || unicode.IsDigit(next)) {
-				builder.WriteString("&#8216;")
-			} else if next == '[' || next == '(' || next == '{' {
-				builder.WriteString("&#8216;")
-			} else if isOpeningQuote(lastRune, next) {
-				builder.WriteString("&#8216;")
-			} else {
-				builder.WriteString("&#8217;")
-			}
-			idx += size
-			lastRune = '\''
 			continue
 		}
 		switch r {
@@ -2789,6 +2640,27 @@ func hasTrailingDashSpace(text string) bool {
 	return strings.Contains(text, " -")
 }
 
+func maybeEnDash(text string, idx int, prev rune) (string, int, rune, bool) {
+	if idx >= len(text) || text[idx] != '-' {
+		return "", 0, 0, false
+	}
+	size := utf8.RuneLen('-')
+	if idx+1 < len(text) && text[idx+1] == ' ' {
+		nextNonSpace := nextNonSpaceRune(text, idx+size+1)
+		if nextNonSpace != 0 && nextNonSpace != '-' {
+			if prev == ' ' || (prev == 0 && hasTrailingDashSpace(text[idx+size:])) {
+				return "&#8211;", size, '–', true
+			}
+		}
+	}
+	if idx+size == len(text) && prev == ' ' && strings.HasPrefix(text, "- ") {
+		inner := strings.TrimSpace(text[2:idx])
+		if inner != "" {
+			return "&#8211;", size, '–', true
+		}
+	}
+	return "", 0, 0, false
+}
 
 func isOpeningQuote(prev, next rune) bool {
 	if prev == 0 {
@@ -2836,6 +2708,19 @@ func isLiteralQuoteContext(prev, next rune) bool {
 		'’': true,
 	}
 	return openers[prev] && closers[next]
+}
+
+func quoteEntityWithContext(r rune, prev, next rune, text string, idx int) string {
+	if r == '\'' && (prev == 0 || unicode.IsSpace(prev)) && unicode.IsDigit(next) {
+		if hasClosingSingleQuote(text, idx+utf8.RuneLen(r)) {
+			return "&#8216;"
+		}
+		return "&#8217;"
+	}
+	if r == '\'' && (next == '[' || next == '(' || next == '{') {
+		return "&#8216;"
+	}
+	return quoteEntity(r, prev, next)
 }
 
 func quoteEntity(r rune, prev, next rune) string {

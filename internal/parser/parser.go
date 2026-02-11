@@ -263,12 +263,8 @@ func parseBlock(blk block, options Options) (*document.D, error) {
 		comment := strings.Join(blk.Lines, "\n")
 		if strings.HasSuffix(strings.TrimSpace(blk.Lines[len(blk.Lines)-1]), "-->") {
 			if options.Restricted {
-				escaped, _ := escapeAndGlyphWithPrev(comment, 0)
-				escaped = strings.ReplaceAll(escaped, "&#8220;", "&#8221;")
-				escaped = wrapCaps(escaped)
-				escaped = strings.ReplaceAll(escaped, "\n", "<br />\n")
 				p := document.New("p")
-				p.AddChild(document.Text(escaped, true))
+				p.AddChild(document.Text(escapeRestrictedComment(comment), true))
 				return p, nil
 			}
 			return document.Text(comment, true), nil
@@ -1614,13 +1610,18 @@ func parseInlineComment(text string, idx int, options Options) (*document.D, int
 	end += idx + 4
 	comment := text[idx : end+3]
 	if options.Restricted {
-		escaped, _ := escapeAndGlyphWithPrev(comment, 0)
-		escaped = strings.ReplaceAll(escaped, "&#8220;", "&#8221;")
-		escaped = wrapCaps(escaped)
-		escaped = strings.ReplaceAll(escaped, "\n", "<br />\n")
+		escaped := escapeRestrictedComment(comment)
 		return document.Text(escaped, true), len(comment), true
 	}
 	return document.Text(comment, true), len(comment), true
+}
+
+func escapeRestrictedComment(comment string) string {
+	escaped, _ := escapeAndGlyphWithPrev(comment, 0)
+	escaped = strings.ReplaceAll(escaped, "&#8220;", "&#8221;")
+	escaped = wrapCaps(escaped)
+	escaped = strings.ReplaceAll(escaped, "\n", "<br />\n")
+	return escaped
 }
 
 func parseInlineHTMLTag(text string, idx int, options Options) (*document.D, rune, int, bool) {

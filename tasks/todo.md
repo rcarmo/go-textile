@@ -5,6 +5,16 @@
 - Parser refactor is complete and stdlib-first.
 - Remaining work is maintenance and future feature parity checks if new fixtures are added.
 
+## Refactor opportunities
+- [ ] Unify inline attribute fragment scanning between block and link contexts.
+- [ ] Consolidate quote handling into a shared classifier to avoid drift.
+- [ ] Centralize dash/en-dash glyph conversion logic.
+- [ ] Share URL sanitization policy logic across link/image helpers.
+- [ ] Factor HTML tag scanning for block detection and wrapper parsing.
+- [ ] Reuse table cell parsing logic with standard inline parsing.
+- [ ] Extract note/footnote anchor construction helper.
+- [x] Extract restricted-comment escaping helper.
+
 ## Completed milestones
 ### 1) Vendor test suite
 - [x] Add php-textile fixtures under `test/fixtures/`.
